@@ -9,13 +9,15 @@ import traceback
 from datetime import datetime
 from datetime import timedelta
 from lxml import etree
+import time
+import itchat
 
 
 class Weibo:
-    cookie = {"Cookie": "your cookie"}  # 将your cookie替换成自己的cookie
 
     # Weibo类初始化
-    def __init__(self, user_id, filter=0):
+    def __init__(self, cookie, user_id, filter=0):
+        self.cookie = {"Cookie": cookie}  # 将your cookie替换成自己的cookie
         self.user_id = user_id  # 用户id，即需要我们输入的数字，如昵称为“Dear-迪丽热巴”的id为1669879400
         self.filter = filter  # 取值范围为0、1，程序默认值为0，代表要爬取用户的全部微博，1代表只爬取用户的原创微博
         self.username = ''  # 用户名，如“Dear-迪丽热巴”
@@ -23,9 +25,11 @@ class Weibo:
         self.weibo_num2 = 0  # 爬取到的微博数
         self.following = 0  # 用户关注数
         self.followers = 0  # 用户粉丝数
+        self.time_span = 120 # 微博发布最近的时间间隔(分钟)
         self.weibo_content = []  # 微博内容
         self.weibo_place = []  # 微博位置
         self.publish_time = []  # 微博发布时间
+        self.time_span_flag = []  # 微博发布间隔是否满足
         self.up_num = []  # 微博对应的点赞数
         self.retweet_num = []  # 微博对应的转发数
         self.comment_num = []  # 微博对应的评论数
@@ -138,7 +142,9 @@ class Weibo:
                 weibo_content = self.get_retweet(
                     is_retweet, info, weibo_content)
             self.weibo_content.append(weibo_content)
-            print(weibo_content)
+            content_info = u"微博内容: " + weibo_content
+            print(content_info)
+            itchat.send(content_info, toUserName='filehelper')
         except Exception as e:
             print("Error: ", e)
             traceback.print_exc()
@@ -164,18 +170,30 @@ class Weibo:
                             sys.stdout.encoding, "ignore").decode(sys.stdout.encoding)
                         break
             self.weibo_place.append(weibo_place)
-            print(u"微博位置: " + weibo_place)
+            place_info = u"微博位置: " + weibo_place
+            print(place_info)
+            itchat.send(place_info, toUserName='filehelper')
         except Exception as e:
             print("Error: ", e)
             traceback.print_exc()
 
     # 获取微博发布时间
     def get_publish_time(self, info):
+        def timeSpanSatisfied(publish_time, span):
+            # 判断是不是最近span分钟发出的微博
+            #time_span = datetime.now() - datetime.strptime(publish_time.encode('utf-8'), "%Y-%m-%d %H:%M")
+            time_span = datetime.now() - datetime.strptime(publish_time, "%Y-%m-%d %H:%M")
+            minute_span = time_span.total_seconds() / 60.0
+            if minute_span < span:
+                return True
+            return False
         try:
+            time_span_flag = True
             str_time = info.xpath("div/span[@class='ct']")
             str_time = str_time[0].xpath("string(.)").encode(
                 sys.stdout.encoding, "ignore").decode(sys.stdout.encoding)
-            publish_time = str_time.split(u'来自')[0]
+            publish_time = str_time.split(u'来自')[0].rstrip().lstrip()
+            #print (u"publish time: " + publish_time)
             if u"刚刚" in publish_time:
                 publish_time = datetime.now().strftime(
                     '%Y-%m-%d %H:%M')
@@ -197,10 +215,18 @@ class Weibo:
             else:
                 publish_time = publish_time[:16]
             self.publish_time.append(publish_time)
-            print(u"微博发布时间: " + publish_time)
+            time_info = u"微博发布时间0: " + publish_time
+            if self.time_span > 0:
+                time_span_flag = timeSpanSatisfied(publish_time, self.time_span)
+            self.time_span_flag.append(time_span_flag)
+            if time_span_flag:
+                time_info = u"微博发布时间: " + publish_time
+                print(time_info)
+                itchat.send(time_info, toUserName='filehelper')
         except Exception as e:
             print("Error: ", e)
             traceback.print_exc()
+        return time_span_flag
 
     # 获取微博发布工具
     def get_publish_tool(self, info):
@@ -213,7 +239,9 @@ class Weibo:
             else:
                 publish_tool = u"无"
             self.publish_tool.append(publish_tool)
-            print(u"微博发布工具: " + publish_tool)
+            tool_info = u"微博发布工具: " + publish_tool
+            print(tool_info)
+            itchat.send(tool_info, toUserName='filehelper')
         except Exception as e:
             print("Error: ", e)
             traceback.print_exc()
@@ -241,14 +269,17 @@ class Weibo:
                 if is_empty:
                     for i in range(0, len(info) - 2):
 
+                        # 微博发布时间
+                        if not self.get_publish_time(info[i]):
+                            break
+
+                        itchat.send(self.username, toUserName='filehelper')
+
                         # 微博内容
                         self.get_weibo_content(info[i])
 
                         # 微博位置
                         self.get_weibo_place(info[i])
-
-                        # 微博发布时间
-                        self.get_publish_time(info[i])
 
                         # 微博发布工具
                         self.get_publish_tool(info[i])
@@ -340,29 +371,64 @@ class Weibo:
             print("Error: ", e)
 
 
+def get_cookie():
+  file_name = './cookie.txt'
+  with open(file_name, 'r') as o:
+      infos = o.readlines()
+      for info in infos:
+          cookie = info.rstrip().lstrip()
+          break
+  return cookie
+
+
+def get_user_names():
+  '''name:测试账号,user_id:1234567,filter:0'''
+  user_ids, filters = [], []
+  file_name = './user_list.txt'
+  with open(file_name, 'r') as o:
+      infos = o.readlines()
+      for info in infos:
+          name, user_id, filter = [i.split(':')[-1] for i in info.split(',')]
+          user_ids.append(int(user_id))
+          filters.append(int(filter))
+  return user_ids, filters
+
+
 def main():
-    try:
-        # 使用实例,输入一个用户id，所有信息都会存储在wb实例中
-        user_id = 1476938315  # 可以改成任意合法的用户id（爬虫的微博id除外）
-        filter = 1  # 值为0表示爬取全部微博（原创微博+转发微博），值为1表示只爬取原创微博
-        wb = Weibo(user_id, filter)  # 调用Weibo类，创建微博实例wb
-        wb.start()  # 爬取微博信息
-        print(u"用户名: " + wb.username)
-        print(u"全部微博数: " + str(wb.weibo_num))
-        print(u"关注数: " + str(wb.following))
-        print(u"粉丝数: " + str(wb.followers))
-        if wb.weibo_content:
-            print(u"最新/置顶 微博为: " + wb.weibo_content[0])
-            print(u"最新/置顶 微博位置: " + wb.weibo_place[0])
-            print(u"最新/置顶 微博发布时间: " + wb.publish_time[0])
-            print(u"最新/置顶 微博获得赞数: " + str(wb.up_num[0]))
-            print(u"最新/置顶 微博获得转发数: " + str(wb.retweet_num[0]))
-            print(u"最新/置顶 微博获得评论数: " + str(wb.comment_num[0]))
-            print(u"最新/置顶 微博发布工具: " + wb.publish_tool[0])
-    except Exception as e:
-        print("Error: ", e)
-        traceback.print_exc()
+    cookie = get_cookie()
+    print "cookie:", cookie
+    user_ids, filters = get_user_names()
+    if len(user_ids) == 0:
+        user_id = [5404259746]
+        filter = [0]
+    for user_id, filter in zip(user_ids, filters):
+        try:
+            # 使用实例,输入一个用户id，所有信息都会存储在wb实例中
+            #user_id = 5404259746
+            #filter = 0  # 值为0表示爬取全部微博（原创微博+转发微博），值为1表示只爬取原创微博
+            wb = Weibo(cookie, user_id, filter)  # 调用Weibo类，创建微博实例wb
+            wb.start()  # 爬取微博信息
+            print(u"用户名: " + wb.username)
+            print(u"全部微博数: " + str(wb.weibo_num))
+            print(u"关注数: " + str(wb.following))
+            print(u"粉丝数: " + str(wb.followers))
+            if wb.weibo_content:
+                print(u"最新/置顶 微博为: " + wb.weibo_content[0])
+                print(u"最新/置顶 微博位置: " + wb.weibo_place[0])
+                print(u"最新/置顶 微博发布时间: " + wb.publish_time[0])
+                print(u"最新/置顶 微博获得赞数: " + str(wb.up_num[0]))
+                print(u"最新/置顶 微博获得转发数: " + str(wb.retweet_num[0]))
+                print(u"最新/置顶 微博获得评论数: " + str(wb.comment_num[0]))
+                print(u"最新/置顶 微博发布工具: " + wb.publish_tool[0])
+        except Exception as e:
+            print("Error: ", e)
+            traceback.print_exc()
 
 
 if __name__ == "__main__":
-    main()
+    itchat.auto_login(enableCmdQR=2)
+    while True:
+        #time_now = datetime.datetime.now()
+        #if time_now.minute % 2 == 0:  # 5分钟扫描一次
+        main()
+        time.sleep(300)
